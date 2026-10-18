@@ -1,0 +1,315 @@
+# 七个镜像共用一个仓库，按版本标签拉取；下载较慢时只需在 .env 中切换 IMAGE_REPOSITORY。
+name: ${COMPOSE_PROJECT_NAME:-ymcloud}
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: 10m, max-file: "3"}
+
+x-app-environment: &app-environment
+  TZ: ${TZ:-Asia/Shanghai}
+  SPRING_PROFILES_ACTIVE: prod
+  LOGGING_LEVEL_ROOT: ${LOG_LEVEL:-INFO}
+  LOGGING_LOGBACK_ROLLINGPOLICY_MAX_FILE_SIZE: ${LOG_FILE_SIZE:-20MB}
+  LOGGING_LOGBACK_ROLLINGPOLICY_MAX_HISTORY: ${LOG_HISTORY_DAYS:-15}
+  LOGGING_LOGBACK_ROLLINGPOLICY_TOTAL_SIZE_CAP: ${LOG_TOTAL_SIZE:-200MB}
+  SPRING_DATA_REDIS_HOST: redis
+  SPRING_DATA_REDIS_PORT: 6379
+  SPRING_DATA_REDIS_DATABASE: 0
+  SPRING_DATA_REDIS_CONNECT_TIMEOUT: 2s
+  SPRING_DATA_REDIS_TIMEOUT: 2s
+  SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-ymcloudRedis123456}
+  SPRING_RABBITMQ_HOST: rabbitmq
+  SPRING_RABBITMQ_PORT: 5672
+  SPRING_RABBITMQ_USERNAME: ymcloud
+  SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-ymcloudRabbit123456}
+  SPRING_RABBITMQ_VIRTUAL_HOST: /ymcloud
+  YMCLOUD_WORKER_SERVICE_TOKEN: ${WORKER_TOKEN:-ymcloud_test_worker_token_0123456789abcdef}
+
+x-judge-environment: &judge-environment
+  YMCLOUD_WORKER_CONCURRENCY: ${JUDGE_CONCURRENCY:-1}
+  YMCLOUD_GO_JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-1}
+  YMCLOUD_GO_JUDGE_SERVICE_MEMORY_BYTES: ${JUDGE_MEMORY_BYTES:-1073741824}
+  YMCLOUD_GO_JUDGE_MAX_MEMORY_KIB: ${JUDGE_MAX_MEMORY_KIB:-524288}
+  YMCLOUD_GO_JUDGE_COMPILE_MEMORY_BYTES: ${JUDGE_COMPILE_MEMORY_BYTES:-536870912}
+  YMCLOUD_GO_JUDGE_COMPILE_WALL_MS: ${JUDGE_COMPILE_WALL_MS:-10000}
+  YMCLOUD_GO_JUDGE_PROCESS_LIMIT: ${JUDGE_PROCESS_LIMIT:-64}
+  YMCLOUD_GO_JUDGE_CPU_RATE: ${JUDGE_CPU_RATE:-1000}
+
+services:
+  preflight:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:web-4.0.0
+    pull_policy: missing
+    platform: linux/amd64
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    pids_limit: 16
+    entrypoint: [python3, /opt/ymcloud/deployment-preflight.py]
+    environment:
+      <<: *judge-environment
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ymcloudRoot123456}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ymcloudMysql123456}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-ymcloudRedis123456}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-ymcloudRabbit123456}
+      TOKEN_SECRET: ${TOKEN_SECRET:-ymcloud_test_login_secret_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789}
+      WORKER_TOKEN: ${WORKER_TOKEN:-ymcloud_test_worker_token_0123456789abcdef}
+      GO_JUDGE_TOKEN: ${GO_JUDGE_TOKEN:-ymcloud_test_go_judge_token_0123456789abcdef}
+      JUDGE_CPUS: ${JUDGE_CPUS:-1.0}
+      JUDGE_PIDS: ${JUDGE_PIDS:-256}
+      WORKER_HEAP_MIB: ${WORKER_HEAP_MIB:-128}
+      WORKER_MEMORY_MIB: ${WORKER_MEMORY_MIB:-384}
+      WORKER_CPUS: ${WORKER_CPUS:-0.5}
+      WORKER_PIDS: ${WORKER_PIDS:-128}
+    logging: *logging
+
+  mysql:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:mysql-8.4
+    pull_policy: missing
+    platform: linux/amd64
+    restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_0900_ai_ci,
+              --innodb-buffer-pool-size=128M, --performance-schema=OFF,
+              --max-connections=40, --table-open-cache=256]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ymcloudRoot123456}
+      TZ: ${TZ:-Asia/Shanghai}
+      MYSQL_DATABASE: ymcloud
+      MYSQL_USER: ymcloud
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ymcloudMysql123456}
+    depends_on:
+      preflight: {condition: service_completed_successfully}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - type: bind
+        source: ./initdb/ymcloud.sql
+        target: /docker-entrypoint-initdb.d/01-ymcloud.sql
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql --protocol=TCP -h 127.0.0.1 -u ymcloud ymcloud -Nse "SELECT COUNT(*) FROM user WHERE id=1" | grep -qx 1']
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 12
+    logging: *logging
+
+  redis:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:redis-7.4-alpine
+    pull_policy: missing
+    platform: linux/amd64
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 32
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-ymcloudRedis123456}
+    command: [sh, -ec, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD" --maxmemory 64mb --maxmemory-policy noeviction']
+    depends_on:
+      preflight: {condition: service_completed_successfully}
+    volumes:
+      - redis-data:/data
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+  rabbitmq:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:rabbitmq-4.1-alpine
+    pull_policy: missing
+    platform: linux/amd64
+    hostname: rabbitmq
+    restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+    environment:
+      RABBITMQ_DEFAULT_USER: ymcloud
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ymcloudRabbit123456}
+      RABBITMQ_DEFAULT_VHOST: /ymcloud
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2 +A 4 -rabbit vm_memory_high_watermark 0.6"
+      RABBITMQ_CTL_ERL_ARGS: "+S 1:1 +A 1"
+    depends_on:
+      preflight: {condition: service_completed_successfully}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks: [data]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, check_running]
+      interval: 15s
+      timeout: 10s
+      start_period: 45s
+      retries: 8
+    logging: *logging
+
+  web:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:web-4.0.0
+    pull_policy: missing
+    platform: linux/amd64
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 256
+    stop_grace_period: 30s
+    environment:
+      <<: *app-environment
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_PORT: 9091
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ymcloud?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=${TZ:-Asia/Shanghai}&characterEncoding=UTF-8&connectTimeout=2000&socketTimeout=3000
+      SPRING_DATASOURCE_USERNAME: ymcloud
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-ymcloudMysql123456}
+      SPRING_DATASOURCE_DRUID_INITIAL_SIZE: 2
+      SPRING_DATASOURCE_DRUID_MIN_IDLE: 2
+      SPRING_DATASOURCE_DRUID_MAX_ACTIVE: 10
+      SPRING_DATASOURCE_DRUID_MAX_WAIT: 2000
+      YMCLOUD_TOKEN_SECRET: ${TOKEN_SECRET:-ymcloud_test_login_secret_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789}
+      YMCLOUD_FILE_BASE_DIR: /data/files
+      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_PASS: ${MAIL_PASS:-}
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    volumes:
+      - web-data:/data/files
+      - web-logs:/data/logs
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m,uid=10001,gid=10001
+    networks: [front, data]
+    healthcheck:
+      test: [CMD, python3, /opt/ymcloud/web-healthcheck.py]
+      interval: 15s
+      timeout: 10s
+      start_period: 90s
+      retries: 8
+    logging: *logging
+
+  go-judge:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:go-judge-4.0.0
+    pull_policy: missing
+    platform: linux/amd64
+    privileged: true
+    cgroup: private
+    restart: unless-stopped
+    read_only: true
+    cpus: ${JUDGE_CPUS:-1.0}
+    mem_limit: ${JUDGE_MEMORY_BYTES:-1073741824}
+    memswap_limit: ${JUDGE_MEMORY_BYTES:-1073741824}
+    pids_limit: ${JUDGE_PIDS:-256}
+    shm_size: 64m
+    environment:
+      YMCLOUD_GO_JUDGE_TOKEN: ${GO_JUDGE_TOKEN:-ymcloud_test_go_judge_token_0123456789abcdef}
+      YMCLOUD_GO_JUDGE_PARALLELISM: ${JUDGE_CONCURRENCY:-1}
+      YMCLOUD_GO_JUDGE_FILE_TTL_SECONDS: 3600
+      YMCLOUD_GO_JUDGE_MAX_FILE_BYTES: 16777216
+    depends_on:
+      preflight: {condition: service_completed_successfully}
+    volumes:
+      - judge-files:/var/lib/go-judge
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+      - /run:rw,nosuid,nodev,size=8m
+    networks: [judge]
+    healthcheck:
+      test: [CMD, python3, /opt/ymcloud/healthcheck.py]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    logging: *logging
+
+  worker:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:worker-4.0.0
+    pull_policy: missing
+    platform: linux/amd64
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: ${WORKER_MEMORY_MIB:-384}m
+    memswap_limit: ${WORKER_MEMORY_MIB:-384}m
+    cpus: ${WORKER_CPUS:-0.5}
+    pids_limit: ${WORKER_PIDS:-128}
+    stop_grace_period: 45s
+    environment:
+      <<: [*app-environment, *judge-environment]
+      YMCLOUD_WORKER_ID: single-worker
+      YMCLOUD_WORKER_HEAP_MIB: ${WORKER_HEAP_MIB:-128}
+      YMCLOUD_WORKER_API_URL: http://web:9091
+      YMCLOUD_WORKER_ALLOW_PRIVATE_HTTP: "true"
+      YMCLOUD_GO_JUDGE_URL: http://go-judge:5050
+      YMCLOUD_GO_JUDGE_ALLOW_PRIVATE_HTTP: "true"
+      YMCLOUD_GO_JUDGE_TOKEN: ${GO_JUDGE_TOKEN:-ymcloud_test_go_judge_token_0123456789abcdef}
+      YMCLOUD_JUDGE_WORK_DIR: /data/work
+      YMCLOUD_JUDGE_CACHE_DIR: /data/cache
+      YMCLOUD_JUDGE_RESULT_DIR: /data/results
+    depends_on:
+      web: {condition: service_healthy, restart: true}
+      go-judge: {condition: service_healthy, restart: true}
+    volumes:
+      - worker-data:/data
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=32m,uid=10001,gid=10001
+    networks: [data, judge]
+    healthcheck:
+      test: [CMD, python3, /opt/ymcloud/worker-healthcheck.py]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    logging: *logging
+
+  frontend:
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:frontend-4.0.0
+    pull_policy: missing
+    platform: linux/amd64
+    user: "101:101"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    memswap_limit: 64m
+    pids_limit: 32
+    ports:
+      - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-80}:8080"
+    depends_on:
+      web: {condition: service_healthy, restart: true}
+    networks: [front]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m,uid=101,gid=101
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:8080/healthz]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+networks:
+  front: {driver: bridge}
+  data: {driver: bridge, internal: true}
+  judge: {driver: bridge, internal: true}
+
+volumes:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:
+  web-data:
+  web-logs:
+  worker-data:
+  judge-files:
