@@ -132,13 +132,12 @@ CREATE TABLE `problem` (
   `problem_id` varchar(255) NOT NULL COMMENT '问题的自定义ID，可作为唯一标识，例如YMOJ-1000（本题库），P1005（洛谷）等等',
   `title` varchar(255) NOT NULL COMMENT '题目标题',
   `content` text COMMENT '题目描述内容（题干）',
-  `is_remote` tinyint(1) DEFAULT '0' COMMENT '是否为vj判题',
   `input` text COMMENT '输入描述',
   `output` text COMMENT '输出描述',
   `examples` text COMMENT '题面样例',
-  `source` varchar(255) DEFAULT NULL COMMENT '题目来源',
-  `difficulty` tinyint NOT NULL DEFAULT '0' COMMENT '难度：0=未评定，1=入门，2=普及，3=提高，4=省选及以上',
-  `mode` tinyint NOT NULL DEFAULT '0' COMMENT '评测模式：0=ACM，1=OI',
+  `source` varchar(255) DEFAULT NULL COMMENT '题目来源说明，可为空，不参与判题',
+  `difficulty` tinyint NOT NULL DEFAULT '1' COMMENT '难度：1=基础，2=进阶，3=挑战，4=高阶，5=大师',
+  `judge_mode` varchar(16) NOT NULL DEFAULT 'default' COMMENT '判题方式：default=普通，spj=特殊，interactive=交互；当前仅支持default',
   `visibility` tinyint NOT NULL DEFAULT '1' COMMENT '可见性：1=公开，2=私有，3=比赛专用',
   `open_case_result` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否允许查看测试样例结果（0=否，1=是）',
   `time_limit` bigint NOT NULL DEFAULT '1000' COMMENT '时间限制（ms）',
@@ -149,7 +148,9 @@ CREATE TABLE `problem` (
   `updated_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `test_data_version_id` bigint DEFAULT NULL COMMENT '测试数据版本ID；NULL表示未绑定或历史版本未知',
   PRIMARY KEY (`id`) USING BTREE,
-  UNIQUE KEY `problem_id` (`problem_id`) USING BTREE
+  UNIQUE KEY `problem_id` (`problem_id`) USING BTREE,
+  CONSTRAINT `chk_problem_difficulty` CHECK (`difficulty` BETWEEN 1 AND 5),
+  CONSTRAINT `chk_problem_judge_mode` CHECK (`judge_mode` IN ('default','spj','interactive'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='题目表';
 
 CREATE TABLE `problem_tag` (
@@ -181,7 +182,7 @@ CREATE TABLE `contest` (
   `description` text COMMENT '比赛说明内容',
   `source_id` bigint unsigned DEFAULT '0' COMMENT '来源比赛ID（0表示原创，其它为克隆赛ID）',
   `rated` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否计入Rating积分（0=否，1=是）',
-  `mode` tinyint NOT NULL DEFAULT '0' COMMENT '赛制模式：0=ACM，1=OI',
+  `mode` tinyint NOT NULL DEFAULT '0' COMMENT '赛制模式：0=ACM，1=OI，2=IOI；OI与IOI暂共用最高分规则',
   `style` tinyint NOT NULL DEFAULT '0' COMMENT '比赛类型：0=其他，1=周赛，2=月赛，3=娱乐赛，4=挑战赛',
   `visibility` tinyint NOT NULL DEFAULT '0' COMMENT '访问权限：0=公开，1=私有（进入需密码）',
   `password` varchar(255) DEFAULT NULL COMMENT '比赛密码（私有模式时使用）',
@@ -268,9 +269,6 @@ CREATE TABLE `judge` (
   `ip` varchar(255) DEFAULT NULL COMMENT '提交用户IP',
   `version` int DEFAULT '1' COMMENT '乐观锁版本号',
   `execution_id` varchar(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '当前评测执行标识；历史记录为空',
-  `vjudge_submit_id` bigint unsigned DEFAULT NULL COMMENT 'vjudge判题在其它oj的提交id',
-  `vjudge_username` varchar(255) DEFAULT NULL COMMENT 'vjudge判题在其它oj的提交用户名',
-  `vjudge_password` varchar(255) DEFAULT NULL COMMENT 'vjudge判题在其它oj的提交账号密码',
   `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `test_data_version_id` bigint DEFAULT NULL COMMENT '测试数据版本ID；NULL表示未绑定或历史版本未知',
@@ -557,38 +555,28 @@ INSERT INTO `role_auth` (`role_id`, `auth_id`) VALUES
 INSERT INTO `language` (`id`, `name`, `image`, `env`, `version`, `content_type`, `file_name`, `file_extension`, `compile_cmd`, `run_cmd`, `template_code`, `code_template`, `type`, `status`, `oj`) VALUES
     (1, 'C++', 'go-judge:v1.13.3', 'debian12-toolchains', 'G++ 12.2.0 (C++17)', 'text/x-c++src', 'main.cpp', '.cpp', 'g++ -O2 -w -fmax-errors=3 -std=c++17 main.cpp -lm -o main', './main', '#include <iostream>
 using namespace std;
-
 int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
-    // 在这里编写解题代码
+    int a, b;
+    cin >> a >> b;
+    cout << a + b << endl;
     return 0;
-}
-', NULL, 0, 1, 'myy'),
+}', NULL, 0, 1, 'myy'),
     (2, 'C', 'go-judge:v1.13.3', 'debian12-toolchains', 'GCC 12.2.0 (C11)', 'text/x-csrc', 'main.c', '.c', 'gcc -O2 -w -fmax-errors=3 -std=c11 main.c -lm -o main', './main', '#include <stdio.h>
-
-int main(void) {
-    // 在这里编写解题代码
+int main() {
+    int a, b;
+    scanf("%d %d", &a, &b);
+    printf("%d\\n", a + b);
     return 0;
-}
-', NULL, 0, 1, 'myy'),
-    (3, 'Java', 'go-judge:v1.13.3', 'debian12-toolchains', 'OpenJDK 17.0.20.1', 'text/x-java', 'Main.java', '.java', 'javac -encoding UTF8 Main.java', 'java Main', 'import java.util.Scanner;
-
-public class Main {
-    public static void main(String[] args) {
-        Scanner scanner = new Scanner(System.in);
-        // 在这里编写解题代码
+}', NULL, 0, 1, 'myy'),
+    (3, 'Java', 'go-judge:v1.13.3', 'debian12-toolchains', 'OpenJDK 17.0.20.1', 'text/x-java', 'Main.java', '.java', 'javac -encoding UTF8 Main.java', 'java Main', 'public class Main {
+    public static void main(String[] args) throws Exception {
+        java.util.Scanner sc = new java.util.Scanner(System.in);
+        int a = sc.nextInt(), b = sc.nextInt();
+        System.out.println(a + b);
     }
-}
-', NULL, 0, 1, 'myy'),
-    (4, 'Python', 'go-judge:v1.13.3', 'debian12-toolchains', 'Python 3.11.2', 'text/x-python', 'main.py', '.py', 'python3 -m py_compile main.py', 'python3 main.py', 'def main():
-    # 在这里编写解题代码
-    pass
-
-
-if __name__ == "__main__":
-    main()
-', NULL, 1, 1, 'myy');
+}', NULL, 0, 1, 'myy'),
+    (4, 'Python', 'go-judge:v1.13.3', 'debian12-toolchains', 'Python 3.11.2', 'text/x-python', 'main.py', '.py', 'python3 -m py_compile main.py', 'python3 main.py', 'a, b = map(int, input().split())
+print(a + b)', NULL, 1, 1, 'myy');
 
 INSERT INTO `system_setting` (`setting_key`, `setting_value`) VALUES
     ('register_enabled', 'true');

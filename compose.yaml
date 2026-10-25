@@ -169,6 +169,8 @@ services:
       <<: *app-environment
       SERVER_ADDRESS: 0.0.0.0
       SERVER_PORT: 9091
+      # OSHI/JNA 原生库只在专用临时挂载加载；普通 /tmp 继续禁止执行。
+      JAVA_TOOL_OPTIONS: -Djna.tmpdir=/jna-tmp
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ymcloud?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=${TZ:-Asia/Shanghai}&characterEncoding=UTF-8&connectTimeout=2000&socketTimeout=3000
       SPRING_DATASOURCE_USERNAME: ymcloud
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-ymcloudMysql123456}
@@ -188,7 +190,8 @@ services:
       - web-data:/data/files
       - web-logs:/data/logs
     tmpfs:
-      - /tmp:rw,nosuid,nodev,size=128m,uid=10001,gid=10001
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=10001,gid=10001
+      - /jna-tmp:rw,exec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001
     networks: [front, data]
     healthcheck:
       test: [CMD, python3, /opt/ymcloud/web-healthcheck.py]
