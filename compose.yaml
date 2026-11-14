@@ -26,10 +26,10 @@ x-app-environment: &app-environment
   YMCLOUD_WORKER_SERVICE_TOKEN: ${WORKER_TOKEN:-ymcloud_test_worker_token_0123456789abcdef}
 
 x-judge-environment: &judge-environment
-  YMCLOUD_WORKER_CONCURRENCY: ${JUDGE_CONCURRENCY:-1}
-  YMCLOUD_GO_JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-1}
-  YMCLOUD_GO_JUDGE_SERVICE_MEMORY_BYTES: ${JUDGE_MEMORY_BYTES:-1073741824}
-  YMCLOUD_GO_JUDGE_MAX_MEMORY_KIB: ${JUDGE_MAX_MEMORY_KIB:-524288}
+  YMCLOUD_WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-0}
+  YMCLOUD_GO_JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-0}
+  YMCLOUD_GO_JUDGE_SERVICE_MEMORY_BYTES: ${JUDGE_MEMORY_BYTES:-1610612736}
+  YMCLOUD_GO_JUDGE_MAX_MEMORY_KIB: ${JUDGE_MAX_MEMORY_KIB:-1048576}
   YMCLOUD_GO_JUDGE_COMPILE_MEMORY_BYTES: ${JUDGE_COMPILE_MEMORY_BYTES:-536870912}
   YMCLOUD_GO_JUDGE_COMPILE_WALL_MS: ${JUDGE_COMPILE_WALL_MS:-10000}
   YMCLOUD_GO_JUDGE_PROCESS_LIMIT: ${JUDGE_PROCESS_LIMIT:-64}
@@ -37,7 +37,7 @@ x-judge-environment: &judge-environment
 
 services:
   preflight:
-    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:web-4.0.0
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:web-4.1.0
     pull_policy: missing
     platform: linux/amd64
     restart: "no"
@@ -153,7 +153,7 @@ services:
     logging: *logging
 
   web:
-    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:web-4.0.0
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:web-4.1.0
     pull_policy: missing
     platform: linux/amd64
     user: "10001:10001"
@@ -202,7 +202,7 @@ services:
     logging: *logging
 
   go-judge:
-    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:go-judge-4.0.0
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:go-judge-4.1.0
     pull_policy: missing
     platform: linux/amd64
     privileged: true
@@ -210,15 +210,15 @@ services:
     restart: unless-stopped
     read_only: true
     cpus: ${JUDGE_CPUS:-1.0}
-    mem_limit: ${JUDGE_MEMORY_BYTES:-1073741824}
-    memswap_limit: ${JUDGE_MEMORY_BYTES:-1073741824}
+    mem_limit: ${JUDGE_MEMORY_BYTES:-1610612736}
+    memswap_limit: ${JUDGE_MEMORY_BYTES:-1610612736}
     pids_limit: ${JUDGE_PIDS:-256}
     shm_size: 64m
     environment:
       YMCLOUD_GO_JUDGE_TOKEN: ${GO_JUDGE_TOKEN:-ymcloud_test_go_judge_token_0123456789abcdef}
-      YMCLOUD_GO_JUDGE_PARALLELISM: ${JUDGE_CONCURRENCY:-1}
+      YMCLOUD_GO_JUDGE_PARALLELISM: ${JUDGE_CONCURRENCY:-0}
       YMCLOUD_GO_JUDGE_FILE_TTL_SECONDS: 3600
-      YMCLOUD_GO_JUDGE_MAX_FILE_BYTES: 16777216
+      YMCLOUD_GO_JUDGE_MAX_FILE_BYTES: 67108864
     depends_on:
       preflight: {condition: service_completed_successfully}
     volumes:
@@ -236,7 +236,7 @@ services:
     logging: *logging
 
   worker:
-    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:worker-4.0.0
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:worker-4.1.0
     pull_policy: missing
     platform: linux/amd64
     user: "10001:10001"
@@ -248,7 +248,8 @@ services:
     memswap_limit: ${WORKER_MEMORY_MIB:-384}m
     cpus: ${WORKER_CPUS:-0.5}
     pids_limit: ${WORKER_PIDS:-128}
-    stop_grace_period: 45s
+    # 最大等待覆盖 Worker 的停机阶段，任务结束后即可退出。
+    stop_grace_period: 65m
     environment:
       <<: [*app-environment, *judge-environment]
       YMCLOUD_WORKER_ID: single-worker
@@ -278,7 +279,7 @@ services:
     logging: *logging
 
   frontend:
-    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:frontend-4.0.0
+    image: ${IMAGE_REPOSITORY:-ccr.ccs.tencentyun.com/ymoj/ymcloud}:frontend-4.1.0
     pull_policy: missing
     platform: linux/amd64
     user: "101:101"

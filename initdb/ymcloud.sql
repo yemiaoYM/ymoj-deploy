@@ -137,8 +137,11 @@ CREATE TABLE `problem` (
   `examples` text COMMENT '题面样例',
   `source` varchar(255) DEFAULT NULL COMMENT '题目来源说明，可为空，不参与判题',
   `difficulty` tinyint NOT NULL DEFAULT '1' COMMENT '难度：1=基础，2=进阶，3=挑战，4=高阶，5=大师',
-  `judge_mode` varchar(16) NOT NULL DEFAULT 'default' COMMENT '判题方式：default=普通，spj=特殊，interactive=交互；当前仅支持default',
-  `visibility` tinyint NOT NULL DEFAULT '1' COMMENT '可见性：1=公开，2=私有，3=比赛专用',
+  `judge_mode` varchar(16) NOT NULL DEFAULT 'default' COMMENT '判题方式：default=普通，spj=特殊；interactive暂不开放',
+  `spj_language` varchar(8) DEFAULT NULL COMMENT 'SPJ语言：C++17 testlib',
+  `spj_code` mediumtext DEFAULT NULL COMMENT '隐藏SPJ校验程序源码',
+  `spj_digest` char(64) DEFAULT NULL COMMENT 'SPJ源码及编译协议摘要',
+  `visibility` tinyint NOT NULL DEFAULT '2' COMMENT '可见性：1=公开，2=私有，3=比赛专属',
   `open_case_result` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否允许查看测试样例结果（0=否，1=是）',
   `time_limit` bigint NOT NULL DEFAULT '1000' COMMENT '时间限制（ms）',
   `memory_limit` bigint NOT NULL DEFAULT '65536' COMMENT '内存限制（KB）',
@@ -184,12 +187,11 @@ CREATE TABLE `contest` (
   `rated` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否计入Rating积分（0=否，1=是）',
   `mode` tinyint NOT NULL DEFAULT '0' COMMENT '赛制模式：0=ACM，1=OI，2=IOI；OI与IOI暂共用最高分规则',
   `style` tinyint NOT NULL DEFAULT '0' COMMENT '比赛类型：0=其他，1=周赛，2=月赛，3=娱乐赛，4=挑战赛',
-  `visibility` tinyint NOT NULL DEFAULT '0' COMMENT '访问权限：0=公开，1=私有（进入需密码）',
-  `password` varchar(255) DEFAULT NULL COMMENT '比赛密码（私有模式时使用）',
+  `visibility` tinyint NOT NULL DEFAULT '0' COMMENT '访问权限：0=公开，1=密码，2=私有',
+  `password` varchar(255) DEFAULT NULL COMMENT '比赛密码（密码模式时使用）',
   `start_time` datetime DEFAULT NULL COMMENT '比赛开始时间',
   `end_time` datetime DEFAULT NULL COMMENT '比赛结束时间',
   `duration` bigint DEFAULT NULL COMMENT '比赛时长（单位：分钟）',
-  `allow_end_submit` tinyint(1) DEFAULT '0' COMMENT '是否允许比赛结束后进行提交',
   `created_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE
@@ -206,7 +208,8 @@ CREATE TABLE `contest_problem` (
   `updated_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE,
   KEY `idx_contest_display` (`contest_id`,`display_id`) USING BTREE,
-  KEY `idx_contest_problem` (`contest_id`,`problem_id`) USING BTREE
+  KEY `idx_contest_problem` (`contest_id`,`problem_id`) USING BTREE,
+  KEY `idx_problem_contest` (`problem_id`,`contest_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='比赛题目表';
 
 CREATE TABLE `contest_user` (
@@ -243,7 +246,8 @@ CREATE TABLE `file` (
   KEY `idx_file_public_url` (`is_public`,`url`(191)),
   KEY `idx_file_legacy_inventory` (`storage_type`,`storage_profile`,`id`),
   KEY `idx_file_storage_profile` (`storage_profile`),
-  KEY `idx_file_url_guard` (`url`(191))
+  KEY `idx_file_url_guard` (`url`(191)),
+  KEY `idx_file_business` (`biz_type`,`biz_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='文件信息表';
 
 CREATE TABLE `judge` (
@@ -313,6 +317,7 @@ CREATE TABLE `judge_dispatch` (
   KEY `idx_dispatch_pending` (`dispatch_state`,`next_attempt_time`),
   KEY `idx_dispatch_deadline` (`dispatch_state`,`deadline_time`),
   KEY `idx_dispatch_version` (`test_data_version_id`),
+  KEY `idx_dispatch_problem` (`problem_id`),
   CONSTRAINT `fk_dispatch_test_data_version` FOREIGN KEY (`test_data_version_id`)
     REFERENCES `test_data_version` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可靠任务发布与结果幂等状态';
@@ -397,8 +402,9 @@ INSERT INTO `user` (`id`, `username`, `password`, `nickname`, `sex`, `email`, `s
 
 INSERT INTO `role` (`id`, `code`, `name`, `description`, `status`, `built_in`) VALUES
     (1, 'USER', '普通用户', '使用题库、比赛及提交功能，无后台权限', 1, 1),
-    (2, 'ADMIN', '管理员', '管理常规后台功能；存储配置写操作仅限超级管理员', 1, 1),
-    (3, 'PROBLEM_ADMIN', '题目管理员', '管理题目、标签及私有测试数据', 1, 1);
+    (2, 'ADMIN', '普通管理员', '管理全站题目与比赛，不能分配管理角色', 1, 1),
+    (3, 'PROBLEM_SETTER', '出题人', '访问非专属题目，管理本人原题及测试数据', 1, 1),
+    (4, 'CONTEST_MANAGER', '比赛管理员', '包含出题人能力，管理及重评本人比赛', 1, 1);
 
 INSERT INTO `user_role` (`user_id`, `role_id`) VALUES
     (1, 2);
@@ -425,6 +431,9 @@ INSERT INTO `auth` (`id`, `code`, `name`, `parent_id`, `path`, `route_name`, `co
     (214, 'user:user:remove', '用户删除', 21, NULL, NULL, NULL, NULL, 'F', 1, 1),
     (311, 'problem:problem:query', '题目查询', 31, NULL, NULL, NULL, NULL, 'F', 1, 1),
     (312, 'problem:problem:edit', '题目编辑', 31, NULL, NULL, NULL, NULL, 'F', 1, 1),
+    (314, 'problem:problem:publish', '调整题目公开状态', 31, NULL, NULL, NULL, NULL, 'F', 1, 1),
+    (548, 'system:submission:rejudge', '重新评测提交', 31, NULL, NULL, NULL, NULL, 'F', 1, 1),
+    (549, 'system:submission:edit', '手动改判（仅超级管理员）', 31, NULL, NULL, NULL, NULL, 'F', 1, 1),
     (313, 'problem:problem:remove', '题目删除', 31, NULL, NULL, NULL, NULL, 'F', 1, 1),
     (331, 'problem:tag:add', '标签新增', 33, NULL, NULL, NULL, NULL, 'F', 1, 1),
     (332, 'problem:tag:edit', '标签编辑', 33, NULL, NULL, NULL, NULL, 'F', 1, 1),
@@ -495,6 +504,8 @@ INSERT INTO `role_auth` (`role_id`, `auth_id`) VALUES
     (2, 311),
     (2, 312),
     (2, 313),
+    (2, 314),
+    (2, 548),
     (2, 331),
     (2, 332),
     (2, 333),
@@ -516,17 +527,6 @@ INSERT INTO `role_auth` (`role_id`, `auth_id`) VALUES
     (2, 516),
     (2, 517),
     (2, 518),
-    (2, 519),
-    (2, 520),
-    (2, 521),
-    (2, 522),
-    (2, 523),
-    (2, 524),
-    (2, 527),
-    (2, 528),
-    (2, 529),
-    (2, 530),
-    (2, 531),
     (2, 532),
     (2, 533),
     (2, 534),
@@ -550,7 +550,34 @@ INSERT INTO `role_auth` (`role_id`, `auth_id`) VALUES
     (3, 343),
     (3, 515),
     (3, 518),
-    (3, 532);
+    (3, 532),
+    (4, 3),
+    (4, 31),
+    (4, 32),
+    (4, 33),
+    (4, 311),
+    (4, 312),
+    (4, 313),
+    (4, 331),
+    (4, 332),
+    (4, 333),
+    (4, 341),
+    (4, 342),
+    (4, 343),
+    (4, 515),
+    (4, 518),
+    (4, 532),
+    (4, 4),
+    (4, 41),
+    (4, 42),
+    (4, 411),
+    (4, 412),
+    (4, 413),
+    (4, 421),
+    (4, 422),
+    (4, 423),
+    (4, 424),
+    (4, 548);
 
 INSERT INTO `language` (`id`, `name`, `image`, `env`, `version`, `content_type`, `file_name`, `file_extension`, `compile_cmd`, `run_cmd`, `template_code`, `code_template`, `type`, `status`, `oj`) VALUES
     (1, 'C++', 'go-judge:v1.13.3', 'debian12-toolchains', 'G++ 12.2.0 (C++17)', 'text/x-c++src', 'main.cpp', '.cpp', 'g++ -O2 -w -fmax-errors=3 -std=c++17 main.cpp -lm -o main', './main', '#include <iostream>

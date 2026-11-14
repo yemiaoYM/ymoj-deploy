@@ -1,4 +1,4 @@
-# YMOJ 部署说明
+# YMOJ v4.1.0 部署说明
 
 使用 Docker Compose 启动前端、后端、判题服务及其依赖。配置直接写在部署目录的 `.env` 中，Compose 会自动读取。
 
@@ -6,7 +6,7 @@
 
 - Ubuntu 等 Linux amd64 系统，启用 cgroup v2。
 - 已安装 Docker Engine 和 Docker Compose v2.20 及以上。
-- 建议至少 2 核 CPU、4 GB 内存；默认同时判题数为 1。
+- 建议至少 2 核 CPU、4 GB 内存；并发参数默认设为 0，由服务按可用 CPU 自动计算；提高并发前需同步核对内存与进程预算。
 - 放行网站端口，默认是 TCP 80。其他服务无需开放公网端口。
 
 ## 2. 下载并进入部署目录
@@ -15,6 +15,8 @@
 git clone https://gitee.com/yemiaoo/ymoj-deploy.git
 cd ymoj-deploy
 ```
+
+也可从 [GitHub 部署仓库](https://github.com/yemiaoYM/ymoj-deploy) 获取同一版本。
 
 如果已下载部署包，解压后 `cd` 到包含 `compose.yaml`、`.env` 和 `initdb/` 的目录。
 
@@ -88,3 +90,19 @@ docker compose logs --tail=100 preflight web worker
 **不要执行 `docker compose down -v`，该命令会删除数据卷。**
 
 首次初始化后不要随意改变 `COMPOSE_PROJECT_NAME`。MySQL、RabbitMQ 已有账号的密码保存在数据卷中，仅修改 `.env` 不会同步修改已有账号。初始化 SQL 也只在空数据库首次启动时执行。
+
+## 7. 从旧版本升级到 v4.1.0
+
+本版项目镜像使用 `web-4.1.0`、`worker-4.1.0`、`go-judge-4.1.0`、`frontend-4.1.0`；预检与 Web 使用相同镜像。MySQL、Redis、RabbitMQ 保持各自基础版本标签。
+
+已有部署不能只替换镜像：本版包含题目与比赛权限、SPJ 字段及判题消息格式变更。先备份数据库、数据卷和原配置，暂停新提交，等待判题、SPJ 编译预检、重试和结果队列（含未确认消息）排空，确认 Worker 无运行任务后停止旧 Web/Worker。
+
+根据实际数据库结构审查源码仓库 `sql/migrations/` 中的以下迁移，按日期顺序仅执行尚未应用的部分，不重复执行；执行前完成脚本要求的历史数据人工确认：
+
+1. `20261101_problem_contest_permissions.sql`：题目与比赛权限、角色和索引调整。
+2. `20261106_problem_spj.sql`：新增 SPJ 语言、源码及摘要字段。
+3. `20261107_judge_payload_cleanup.sql`：清理历史判题快照中已移除的消息字段。
+
+这些脚本不能替代对实际数据库与目标结构的差异核对。初始化 SQL 仅供全新数据库使用，禁止向已有数据库重新导入 `sql/ymcloud.sql`。迁移脚本未随部署包提供时，应先取得与本版匹配且经过审查的迁移文件，再开始升级。
+
+保留原 `.env` 中的密码、密钥及自定义资源配置，逐项合并新模板；在确认四个项目镜像均已发布后拉取镜像，同步升级 Web、Worker、go-judge 和前端。检查服务健康，并验证登录、普通判题、SPJ、比赛提交及结果展示后恢复提交。若需回退，使用与旧代码匹配的数据库备份和配置，不能仅回退镜像。
